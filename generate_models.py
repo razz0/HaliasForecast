@@ -73,18 +73,16 @@ def preprocess_data(input_datacube, output_datacube, input_dimensions, output_di
             if dimension == link_dimension:
                 link_resource = value
 
-        output_value = None
+        output_value = 0
         for output_observation in output_datacube.subjects(link_dimension, link_resource):
-            if output_datacube.objects(output_observation, ns_hs.observedSpecies) != ns_bio.FMNH_372767:
-                # TODO: Remove this
+            if next(output_datacube.objects(output_observation, ns_hs.observedSpecies)) != ns_bio.FMNH_372767:  # TODO
                 continue
-            output_value = next(output_datacube.objects(output_observation, output_dimension))
+            output_value = next(output_datacube.objects(output_observation, output_dimension)).toPython()
 
         # TODO: Try imputing missing values: http://scikit-learn.org/stable/auto_examples/missing_values.html#example-missing-values-py
 
         # Skipping rows with missing values for now
         if link_resource is not None \
-                and output_value is not None \
                 and not any([math.isnan(val) for val in good_values]):
             xx[link_resource] = good_values
             yy[link_resource] = output_value
@@ -108,7 +106,7 @@ output_cube.parse('../../HALIAS/JavaOutput/HALIAS4_full.ttl', format='turtle')
 
 x_train, y_train = preprocess_data(input_cube,
                                    output_cube,
-                                   [ns_hs.rainfall, ns_hs.standardTemperature],
+                                   [ns_hs.rainfall, ns_hs.standardTemperature, ns_hs.airPressure, ns_hs.cloudCover],
                                    ns_hs.countTotal,
                                    ns_hs.refTime)
 
