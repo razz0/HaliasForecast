@@ -1,0 +1,3 @@
+'''
+Halias Forecast package
+'''
