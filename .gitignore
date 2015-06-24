@@ -1,4 +1,5 @@
-model/
+model
+data
 
 *.py[co]
 

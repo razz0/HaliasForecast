@@ -9,8 +9,8 @@ class PredictionModel(object):
         self.name = name
         self.JSON_FILE = json_file
         self.model_kwargs = model_kwargs
-        self.disruptions = {}
-        self.stored_disruptions = {}
+        self.predictions = {}
+        self.stored_predictions = {}
         self.model = None  # Prediction model
 
     def predict(self, *args):
@@ -97,7 +97,7 @@ def init_models():
     :return: list of PredictionModel
     """
     models = []
-    models.append(PredictionModel('0-model', 'data/disruptions_model0.json'))
+    models.append(PredictionModel('0-model', 'data/0model.json'))
     models.append(ModelNN('4NN', 'data/4nn.json', 'model/4nn.pkl', n_neighbors=4))
     # models.append(
     #     ModelRandomForest('Optimized Forest', 'data/opt_forest.json', 6, 'model/opt_forest.pkl'))

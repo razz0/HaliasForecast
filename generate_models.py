@@ -8,11 +8,11 @@ import numpy as np
 
 from rdflib import Graph, RDF, Namespace
 from rdflib.collection import Collection
-import models
 
-ns_qb = Namespace('http://purl.org/linked-data/cube#')
-ns_hs = Namespace('http://ldf.fi/schema/halias/')
-ns_bio = Namespace('http://www.yso.fi/onto/bio/')
+from sklearn.preprocessing import StandardScaler
+from sklearn.externals import joblib
+
+import models
 
 
 parser = argparse.ArgumentParser(description='Generate models')
@@ -24,10 +24,18 @@ parser.add_argument('-v', help='Add verbosity',
 args = parser.parse_args()
 
 
+ns_qb = Namespace('http://purl.org/linked-data/cube#')
+ns_hs = Namespace('http://ldf.fi/schema/halias/')
+ns_bio = Namespace('http://www.yso.fi/onto/bio/')
+
+
+input_scaler = StandardScaler()
+
 
 def preprocess_data(input_datacube, output_datacube, input_dimensions, output_dimension, link_dimension):
     '''
     Format data cubes to numpy arrays.
+
     :param input_datacube: Graph containing only data cube input observations
     :type input_datacube: Graph
     :param output_datacube:
@@ -90,29 +98,35 @@ def preprocess_data(input_datacube, output_datacube, input_dimensions, output_di
     x = np.array([values for index, values in sorted(xx.items())], dtype='float_')
     y = np.array([values for index, values in sorted(yy.items())], dtype='int_')
 
+    x = input_scaler.fit_transform(X=x)
+    # y = StandardScaler().fit_transform(X=y)
+
     return x, y
 
 
 
 # TODO: Remove "hs:haliasObservationDay  false" observations from input cube when preprocessing
 
-input_cube = Graph()
-input_cube.parse('../../HALIAS/JavaOutput/halias_weather_cube.ttl', format='turtle')
+weather_cube = Graph()
+weather_cube.parse('data/halias_weather_cube.ttl', format='turtle')
 
 # TODO: Create separate model for each species (separate model selection?)
 
-output_cube = Graph()
-output_cube.parse('../../HALIAS/JavaOutput/HALIAS4_full.ttl', format='turtle')
+bird_cube = Graph()
+bird_cube.parse('data/HALIAS4_full.ttl', format='turtle')
 
-x_train, y_train = preprocess_data(input_cube,
-                                   output_cube,
+x_train, y_train = preprocess_data(weather_cube,
+                                   bird_cube,
                                    [ns_hs.rainfall, ns_hs.standardTemperature, ns_hs.airPressure, ns_hs.cloudCover],
                                    ns_hs.countTotal,
                                    ns_hs.refTime)
 
+joblib.dump(input_scaler, 'model/scaler.pkl')
+
 def _save_model(generated_model):
     generated_model.save_model()
     print('Saved model %s - %s' % (generated_model.name, generated_model.model))
+    # print('      model params %s' % (generated_model.model.get_params() if generated_model.model else '---'))
 
 for model in models.prediction_models:
 
