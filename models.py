@@ -1,5 +1,7 @@
 """Prediction models for Halias migration prediction based on weather forecast"""
 
+import numpy as np
+
 class PredictionModel(object):
     """
     Abstract model class
@@ -16,7 +18,10 @@ class PredictionModel(object):
     def predict(self, *args):
         return 0
 
-    def generate_model(self, x, y):
+    def generate_model(self):
+        pass
+
+    def fit_model(self, x, y):
         pass
 
     def save_model(self):
@@ -32,12 +37,6 @@ class Model0(PredictionModel):
     def predict(self, *args):
         return 0
 
-    def generate_model(self, x, y):
-        from sklearn.neighbors import KNeighborsRegressor
-
-        self.model = KNeighborsRegressor(**self.model_kwargs)
-        self.model.fit(x, y)
-
 
 class ScikitPredictor(PredictionModel):
     """Pre-calculated Scikit-learn prediction model"""
@@ -49,12 +48,12 @@ class ScikitPredictor(PredictionModel):
 
     def predict(self, *args):
         val = self.model.predict(*args)
-        if type(val) == list:
+        if type(val) in [list, np.ndarray]:
             if len(val) > 1:
                 raise Exception('Predicted multiple values')
-            return val[0]
+            return int(round(val[0]))
         else:
-            return int(val)
+            return int(round(val))
 
     def save_model(self):
         from sklearn.externals import joblib
@@ -71,22 +70,37 @@ class ScikitPredictor(PredictionModel):
 class ModelNN(ScikitPredictor):
     '''Nearest neighbor classifier'''
 
-    def generate_model(self, x, y):
-        from sklearn.neighbors import KNeighborsRegressor
+    def generate_model(self):
+        from sklearn.neighbors import KNeighborsClassifier
+        self.model = KNeighborsClassifier(**self.model_kwargs)
 
+    def fit_model(self, x, y):
+        self.model.fit(x, y)
+
+
+
+class ModelNNReg(ScikitPredictor):
+    '''Nearest neighbor regression'''
+
+    def generate_model(self):
+        from sklearn.neighbors import KNeighborsRegressor
         self.model = KNeighborsRegressor(**self.model_kwargs)
+
+    def fit_model(self, x, y):
         self.model.fit(x, y)
 
 
 class ModelRandomForest(ScikitPredictor):
     '''Random forest classifier'''
 
-    def generate_model(self, x, y):
+    def generate_model(self):
         from sklearn import ensemble
 
         # TODO: Try also regressor?
 
         self.model = ensemble.RandomForestClassifier(**self.model_kwargs)
+
+    def fit_model(self, x, y):
         self.model.fit(x, y)
 
 
@@ -99,6 +113,8 @@ def init_models():
     models = []
     models.append(PredictionModel('0-model', 'data/0model.json'))
     models.append(ModelNN('4NN', 'data/4nn.json', 'model/4nn.pkl', n_neighbors=4))
+    # models.append(ModelNNReg('4NN regressor', 'data/4nnr.json', 'model/4nnr.pkl', n_neighbors=4))
+    # models.append(ModelNNReg('4NN regressor', 'data/4nnr.json', 'model/4nnr.pkl', n_neighbors=4, algorithm='auto'))
     # models.append(
     #     ModelRandomForest('Optimized Forest', 'data/opt_forest.json', 6, 'model/opt_forest.pkl'))
 

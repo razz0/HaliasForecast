@@ -6,11 +6,12 @@ import argparse
 
 import numpy as np
 
-from rdflib import Graph, RDF, Namespace
+from rdflib import Graph, RDF, Namespace, URIRef
 from rdflib.collection import Collection
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.externals import joblib
+from sklearn import cross_validation
 
 import models
 
@@ -27,12 +28,11 @@ args = parser.parse_args()
 ns_qb = Namespace('http://purl.org/linked-data/cube#')
 ns_hs = Namespace('http://ldf.fi/schema/halias/')
 ns_bio = Namespace('http://www.yso.fi/onto/bio/')
+ns_tr = Namespace('http://www.yso.fi/onto/taxonomic-ranks/')
 
 
-input_scaler = StandardScaler()
 
-
-def preprocess_data(input_datacube, output_datacube, input_dimensions, output_dimension, link_dimension):
+def preprocess_data(input_datacube, output_datacube, input_dimensions, output_dimension, link_dimension, separate_models=None):
     '''
     Format data cubes to numpy arrays.
 
@@ -83,8 +83,9 @@ def preprocess_data(input_datacube, output_datacube, input_dimensions, output_di
 
         output_value = 0
         for output_observation in output_datacube.subjects(link_dimension, link_resource):
-            if next(output_datacube.objects(output_observation, ns_hs.observedSpecies)) != ns_bio.FMNH_372767:  # TODO
-                continue
+            if separate_models:
+                if next(output_datacube.objects(output_observation, ns_hs.observedSpecies)) != ns_bio.FMNH_372876:  # TODO
+                    continue
             output_value = next(output_datacube.objects(output_observation, output_dimension)).toPython()
 
         # TODO: Try imputing missing values: http://scikit-learn.org/stable/auto_examples/missing_values.html#example-missing-values-py
@@ -98,30 +99,55 @@ def preprocess_data(input_datacube, output_datacube, input_dimensions, output_di
     x = np.array([values for index, values in sorted(xx.items())], dtype='float_')
     y = np.array([values for index, values in sorted(yy.items())], dtype='int_')
 
+    input_scaler = StandardScaler()
+
     x = input_scaler.fit_transform(X=x)
     # y = StandardScaler().fit_transform(X=y)
 
-    return x, y
-
+    return x, y, input_scaler
 
 
 # TODO: Remove "hs:haliasObservationDay  false" observations from input cube when preprocessing
 
-weather_cube = Graph()
-weather_cube.parse('data/halias_weather_cube.ttl', format='turtle')
+# TODO: Try 0-inflated models
+
+try:
+    weather_cube = joblib.load('data/halias_weather_cube.pkl')
+except IOError:
+    weather_cube = Graph()
+    weather_cube.parse('data/halias_weather_cube.ttl', format='turtle')
+    joblib.dump(weather_cube, 'data/halias_weather_cube.pkl')
+
+try:
+    bird_cube = joblib.load('data/halias_bird_cube.pkl')
+except IOError:
+    bird_cube = Graph()
+    bird_cube.parse('data/HALIAS0_full.ttl', format='turtle')
+    bird_cube.parse('data/HALIAS1_full.ttl', format='turtle')
+    bird_cube.parse('data/HALIAS2_full.ttl', format='turtle')
+    bird_cube.parse('data/HALIAS3_full.ttl', format='turtle')
+    bird_cube.parse('data/HALIAS4_full.ttl', format='turtle')
+    joblib.dump(bird_cube, 'data/halias_bird_cube.pkl')
+
+bird_ontology = Graph()
+bird_ontology.parse('data/halias_taxon_ontology.ttl', format='turtle')
+
+species = bird_ontology.subjects(RDF.type, ns_tr.Species)
+species = [sp for sp in species if next(bird_ontology.objects(sp, ns_hs.rarity)) == URIRef(ns_hs.common)]
 
 # TODO: Create separate model for each species (separate model selection?)
 
-bird_cube = Graph()
-bird_cube.parse('data/HALIAS4_full.ttl', format='turtle')
+# TODO: Use only species with hs:rarity hs:common
+# [170 common, 323 rare taxa]
 
-x_train, y_train = preprocess_data(weather_cube,
-                                   bird_cube,
-                                   [ns_hs.rainfall, ns_hs.standardTemperature, ns_hs.airPressure, ns_hs.cloudCover],
-                                   ns_hs.countTotal,
-                                   ns_hs.refTime)
+x_train, y_train, scaler = preprocess_data(weather_cube,
+                                           bird_cube,
+                                           [ns_hs.rainfall, ns_hs.standardTemperature, ns_hs.airPressure, ns_hs.cloudCover],
+                                           ns_hs.countTotal,
+                                           ns_hs.refTime,
+                                           separate_models={URIRef(ns_hs.observedSpecies): species})
 
-joblib.dump(input_scaler, 'model/scaler.pkl')
+joblib.dump(scaler, 'model/scaler.pkl')
 
 def _save_model(generated_model):
     generated_model.save_model()
@@ -163,6 +189,14 @@ for model in models.prediction_models:
     #         _save_model(model)
     # else:
     #     if not args.optimized:
-    model.generate_model(x_train, y_train)
+
+    model.generate_model()
+
+    if model.model:
+        scores = cross_validation.cross_val_score(model.model, x_train, y_train, cv=4)
+        # print("Model accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
+        print("Model accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
+
+    model.fit_model(x_train, y_train)
     _save_model(model)
 
