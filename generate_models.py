@@ -1,20 +1,16 @@
 '''Generate prediction models'''
-
+from collections import defaultdict
 import math
-import iso8601
 import argparse
 
 import numpy as np
-
-from rdflib import Graph, RDF, Namespace, URIRef
-from rdflib.collection import Collection
-
+from rdflib import Graph, RDF, URIRef
 from sklearn.preprocessing import StandardScaler
 from sklearn.externals import joblib
 from sklearn import cross_validation
 
+from haliasdata import *
 import models
-
 
 parser = argparse.ArgumentParser(description='Generate models')
 #parser.add_argument('generate', help='Generate normal models', type=bool)
@@ -25,12 +21,7 @@ parser.add_argument('-v', help='Add verbosity',
 args = parser.parse_args()
 
 
-ns_qb = Namespace('http://purl.org/linked-data/cube#')
-ns_hs = Namespace('http://ldf.fi/schema/halias/')
-ns_bio = Namespace('http://www.yso.fi/onto/bio/')
-ns_tr = Namespace('http://www.yso.fi/onto/taxonomic-ranks/')
-
-
+# TODO: Aggregate daily sums to some classes
 
 def preprocess_data(input_datacube, output_datacube, input_dimensions, output_dimension, link_dimension, separate_models=None):
     '''
@@ -43,10 +34,9 @@ def preprocess_data(input_datacube, output_datacube, input_dimensions, output_di
     :param input_dimensions:
     :param output_dimension:
 
-    :rtype tuple of np.array
     '''
     xx = {}
-    yy = {}
+    yy = defaultdict(dict)
 
     # TODO: Allow mapping of input dimensions to 1 or more values, eg. refTime -> day of year
 
@@ -81,12 +71,13 @@ def preprocess_data(input_datacube, output_datacube, input_dimensions, output_di
             if dimension == link_dimension:
                 link_resource = value
 
-        output_value = 0
+        output_values = {}
+        model_name = None
         for output_observation in output_datacube.subjects(link_dimension, link_resource):
             if separate_models:
-                if next(output_datacube.objects(output_observation, ns_hs.observedSpecies)) != ns_bio.FMNH_372876:  # TODO
-                    continue
-            output_value = next(output_datacube.objects(output_observation, output_dimension)).toPython()
+                model_name = str(next(output_datacube.objects(output_observation, ns_hs.observedSpecies)))
+
+            output_values[model_name] = next(output_datacube.objects(output_observation, output_dimension)).toPython()
 
         # TODO: Try imputing missing values: http://scikit-learn.org/stable/auto_examples/missing_values.html#example-missing-values-py
 
@@ -94,109 +85,71 @@ def preprocess_data(input_datacube, output_datacube, input_dimensions, output_di
         if link_resource is not None \
                 and not any([math.isnan(val) for val in good_values]):
             xx[link_resource] = good_values
-            yy[link_resource] = output_value
+            # yy[link_resource] = output_value
+            for model_name, output in output_values.items():
+                yy[model_name].update({link_resource: output})
 
     x = np.array([values for index, values in sorted(xx.items())], dtype='float_')
-    y = np.array([values for index, values in sorted(yy.items())], dtype='int_')
+
+    y_dict = {}
+    for model_name, model_y in yy.items():
+        y = np.array([values for index, values in sorted(model_y.items())], dtype='int_')
+        y_dict[model_name] = y
 
     input_scaler = StandardScaler()
 
     x = input_scaler.fit_transform(X=x)
     # y = StandardScaler().fit_transform(X=y)
 
-    return x, y, input_scaler
+    return x, y_dict, input_scaler
 
 
 # TODO: Remove "hs:haliasObservationDay  false" observations from input cube when preprocessing
 
 # TODO: Try 0-inflated models
 
-try:
-    weather_cube = joblib.load('data/halias_weather_cube.pkl')
-except IOError:
-    weather_cube = Graph()
-    weather_cube.parse('data/halias_weather_cube.ttl', format='turtle')
-    joblib.dump(weather_cube, 'data/halias_weather_cube.pkl')
+weather_cube = load_weather_cube()
+bird_cube = load_bird_cube()
 
-try:
-    bird_cube = joblib.load('data/halias_bird_cube.pkl')
-except IOError:
-    bird_cube = Graph()
-    bird_cube.parse('data/HALIAS0_full.ttl', format='turtle')
-    bird_cube.parse('data/HALIAS1_full.ttl', format='turtle')
-    bird_cube.parse('data/HALIAS2_full.ttl', format='turtle')
-    bird_cube.parse('data/HALIAS3_full.ttl', format='turtle')
-    bird_cube.parse('data/HALIAS4_full.ttl', format='turtle')
-    joblib.dump(bird_cube, 'data/halias_bird_cube.pkl')
-
-bird_ontology = Graph()
-bird_ontology.parse('data/halias_taxon_ontology.ttl', format='turtle')
+bird_ontology = load_bird_ontology()
 
 species = bird_ontology.subjects(RDF.type, ns_tr.Species)
 species = [sp for sp in species if next(bird_ontology.objects(sp, ns_hs.rarity)) == URIRef(ns_hs.common)]
+species = species[:10]  # TODO Use all
 
 # TODO: Create separate model for each species (separate model selection?)
 
-# TODO: Use only species with hs:rarity hs:common
-# [170 common, 323 rare taxa]
 
-x_train, y_train, scaler = preprocess_data(weather_cube,
-                                           bird_cube,
-                                           [ns_hs.rainfall, ns_hs.standardTemperature, ns_hs.airPressure, ns_hs.cloudCover],
-                                           ns_hs.countTotal,
-                                           ns_hs.refTime,
-                                           separate_models={URIRef(ns_hs.observedSpecies): species})
+x_train, y_train_dict, scaler = preprocess_data(weather_cube,
+                                bird_cube,
+                                [ns_hs.rainfall, ns_hs.standardTemperature, ns_hs.airPressure, ns_hs.cloudCover],
+                                ns_hs.countTotal,
+                                ns_hs.refTime,
+                                separate_models={URIRef(ns_hs.observedSpecies): species})
 
 joblib.dump(scaler, 'model/scaler.pkl')
 
-def _save_model(generated_model):
-    generated_model.save_model()
-    print('Saved model %s - %s' % (generated_model.name, generated_model.model))
-    # print('      model params %s' % (generated_model.model.get_params() if generated_model.model else '---'))
+for model_name, y_train in y_train_dict.items():
 
-for model in models.prediction_models:
+    best_model = None
+    best_score = 0
 
-    # if model.name == 'Optimized Forest':
-    #     if args.optimized:
-    #         best_score = 0
-    #         best_params = {}
-    #         for n_estimators in range(2, 50):
-    #             if args.verbose:
-    #                 print "Calculating models for %s trees" % n_estimators
-    #             for criterion in ['gini', 'entropy']:
-    #                 for max_features in range(1, 7):  # + ['auto', 'log2']:
-    #                     for max_depth in range(3, 15) + [None]:
-    #                         for class_weight in [None]:  # ['auto', None]:
-    #                             model.model_kwargs = dict(n_estimators=n_estimators,
-    #                                                       criterion=criterion,
-    #                                                       max_features=max_features,
-    #                                                       max_depth=max_depth,
-    #                                                       class_weight=class_weight)
-    #                             model.generate_model(x_train, y_train)
-    #                             score = model.model.score(x_test, y_test)
-    #                             if score > best_score:
-    #                                 best_params = model.model_kwargs
-    #                                 best_score = score
-    #                                 print "%s -- %s" % (score, best_params)
-    #
-    #         model.model_kwargs = best_params
-    #         print "Best found params: %s" % best_params
-    #         # Best found params:
-    #         # {'max_features': 2, 'n_estimators': 38, 'criterion': 'gini', 'max_depth': 10, 'class_weight': None}
-    #         print "Feature importances: %s" % model.model.feature_importances_
-    #         # Feature importances: [ 0.08076559  0.30474923  0.14358273  0.19469095  0.1400464   0.1361651 ]
-    #         model.generate_model(x_train, y_train)
-    #         _save_model(model)
-    # else:
-    #     if not args.optimized:
+    for model in models.prediction_models:
 
-    model.generate_model()
-
-    if model.model:
+        model.generate_model()
         scores = cross_validation.cross_val_score(model.model, x_train, y_train, cv=4)
-        # print("Model accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-        print("Model accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
 
-    model.fit_model(x_train, y_train)
-    _save_model(model)
+        if scores.mean() > best_score:
+            best_model = model
+
+    if best_model.model:
+
+        # print("Model accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
+        print("%s model %s accuracy: %0.2f (+/- %0.2f)" % (model_name, model.name, scores.mean(), scores.std() * 2))
+
+    best_model.fit_model(x_train, y_train)
+    best_model.filename = model_name
+
+    best_model.save_model()
+    print('Saved model %s - %s' % (best_model.name, best_model.model))
 

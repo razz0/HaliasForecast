@@ -1,5 +1,10 @@
 """Prediction models for Halias migration prediction based on weather forecast"""
 
+from sklearn.externals import joblib
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn import ensemble
+
 import numpy as np
 
 class PredictionModel(object):
@@ -25,9 +30,6 @@ class PredictionModel(object):
         pass
 
     def save_model(self):
-        pass
-
-    def load_model(self):
         pass
 
 
@@ -56,22 +58,13 @@ class ScikitPredictor(PredictionModel):
             return int(round(val))
 
     def save_model(self):
-        from sklearn.externals import joblib
-        joblib.dump(self.model, self.filename)
-
-    def load_model(self):
-        from sklearn.externals import joblib
-        try:
-            self.model = joblib.load(self.filename)
-        except IOError:
-            pass
+        joblib.dump(self, self.filename)
 
 
 class ModelNN(ScikitPredictor):
     '''Nearest neighbor classifier'''
 
     def generate_model(self):
-        from sklearn.neighbors import KNeighborsClassifier
         self.model = KNeighborsClassifier(**self.model_kwargs)
 
     def fit_model(self, x, y):
@@ -83,7 +76,6 @@ class ModelNNReg(ScikitPredictor):
     '''Nearest neighbor regression'''
 
     def generate_model(self):
-        from sklearn.neighbors import KNeighborsRegressor
         self.model = KNeighborsRegressor(**self.model_kwargs)
 
     def fit_model(self, x, y):
@@ -94,7 +86,6 @@ class ModelRandomForest(ScikitPredictor):
     '''Random forest classifier'''
 
     def generate_model(self):
-        from sklearn import ensemble
 
         # TODO: Try also regressor?
 
@@ -121,14 +112,16 @@ def init_models():
     return models
 
 
-def load_models(models):
+def load_models(models, filenames):
     """
     Import models from generated pickle files.
 
     :parameter models: list of PredictionModel
     """
-    for model in models:
-        model.load_model()
+    models = []
+    for filename in filenames:
+        model = joblib.load(filename)
+        models.append(model)
 
 
 def generate_models(models, xx, yy):
